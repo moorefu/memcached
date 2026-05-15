@@ -135,6 +135,9 @@ jobs:
               make install
               cd /workspace
 
+              # Fix dubious ownership from docker mount
+              git config --global --add safe.directory /workspace
+
               # Build memcached: static libs, dynamic glibc
               # Static: libevent, libssl/libcrypto, libseccomp
               # Dynamic: glibc, cyrus-sasl (plugins loaded at runtime)
@@ -150,7 +153,8 @@ jobs:
                 --enable-tls \
                 --enable-sasl \
                 --enable-sasl-pwdb \
-                LDFLAGS="-L/tmp/libseccomp-install/lib"
+                LDFLAGS="-L/tmp/libseccomp-install/lib" \
+                LIBS="-lpthread -ldl"
               make -j$(nproc)
 
               # Verify: static libs should NOT appear in ldd
