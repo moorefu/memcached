@@ -154,6 +154,7 @@ jobs:
                 --enable-sasl \
                 --enable-sasl-pwdb \
                 LDFLAGS="-L/tmp/libseccomp-install/lib" \
+                CPPFLAGS="-I/tmp/libseccomp-install/include" \
                 LIBS="-lpthread -ldl"
               make -j$(nproc)
 
