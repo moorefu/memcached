@@ -1,0 +1,173 @@
+name: Build memcached
+
+on:
+  workflow_call:
+    inputs:
+      release_version:
+        required: true
+        type: string
+      make_latest:
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      release_version:
+        description: "The version of memcached being built"
+        value: ${{ jobs.prepare.outputs.release_version }}
+
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Version to release (e.g. 1.6.29)'
+        required: true
+        type: string
+      make_latest:
+        description: 'Mark as latest release'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Mark as prerelease'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.setup.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment
+        id: setup
+        run: |
+          VERSION="${{ inputs.release_version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          git archive -o memcached-$VERSION.tar.gz HEAD
+
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: memcached-source
+          path: memcached-${{ inputs.release_version }}.tar.gz
+
+  build-linux:
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            image: quay.io/pypa/manylinux2014_x86_64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux2014_aarch64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build in manylinux container
+        run: |
+          VERSION="${{ needs.prepare.outputs.release_version }}"
+
+          docker run --rm \
+            -v "$(pwd)":/workspace \
+            -w /workspace \
+            ${{ matrix.image }} \
+            sh -c '
+              set -e
+
+              # Enable devtoolset for newer GCC
+              for dts in /opt/rh/devtoolset-*/enable; do
+                [ -f "$dts" ] && source "$dts" && break
+              done
+
+              # Install build dependencies
+              yum install -y autoconf automake libtool openssl-devel libseccomp-devel cyrus-sasl-devel
+
+              # Build static libevent
+              LIBEVENT_VER=2.1.12-stable
+              curl -sSL -O https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VER/libevent-$LIBEVENT_VER.tar.gz
+              tar -xzf libevent-$LIBEVENT_VER.tar.gz
+              cd libevent-$LIBEVENT_VER
+              ./configure \
+                --disable-shared \
+                --enable-static \
+                --prefix=/tmp/libevent-install \
+                --disable-openssl
+              make -j$(nproc)
+              make install
+              cd /workspace
+
+              # Write version.m4 for memcached
+              echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
+
+              # Build memcached with static libevent, dynamic glibc
+              ./autogen.sh
+              ./configure \
+                --with-libevent=/tmp/libevent-install \
+                --enable-seccomp \
+                --enable-tls \
+                --enable-sasl \
+                --enable-sasl-pwdb
+              make -j$(nproc)
+
+              # Verify: libevent should NOT appear in ldd (statically linked)
+              # glibc (libc.so.6) SHOULD appear (dynamically linked)
+              echo "=== ldd output ==="
+              ldd memcached || true
+              echo "=== file output ==="
+              file memcached
+            '
+
+      - name: Verify
+        run: docker run --rm -v "$(pwd)":/workspace -w /workspace ${{ matrix.image }} ./memcached --version
+
+      - name: Package
+        run: |
+          VERSION="${{ needs.prepare.outputs.release_version }}"
+          DIST="memcached-$VERSION-linux-glibc2.17-${{ matrix.arch }}"
+          mkdir -p "$DIST"
+          cp memcached "$DIST/"
+          cp scripts/memcached-tool "$DIST/" 2>/dev/null || true
+          tar czf "$DIST.tar.gz" "$DIST"
+          sha256sum "$DIST.tar.gz" > "$DIST.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memcached-linux-${{ matrix.arch }}
+          path: |
+            memcached-*-linux-glibc2.17-${{ matrix.arch }}.tar.gz
+            memcached-*-linux-glibc2.17-${{ matrix.arch }}.tar.gz.sha256
+
+  release:
+    needs: [prepare, build-linux]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.release_version }}
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: memcached ${{ env.VERSION }}
+          tag_name: ${{ env.VERSION }}
+          make_latest: "${{ inputs.make_latest }}"
+          prerelease: ${{ inputs.prerelease }}
+          files: |
+            memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64.tar.gz
+            memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64.tar.gz.sha256
+            memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64.tar.gz
+            memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64.tar.gz.sha256
