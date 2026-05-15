@@ -204,7 +204,7 @@ jobs:
             base-devel
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-libsasl
+            mingw-w64-x86_64-cyrus-sasl
             gperf
             perl
             curl
