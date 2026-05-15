@@ -190,8 +190,105 @@ jobs:
             memcached-*-linux-glibc2.17-${{ matrix.arch }}.tar.gz
             memcached-*-linux-glibc2.17-${{ matrix.arch }}.tar.gz.sha256
 
+  build-windows:
+    needs: prepare
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-libsasl
+            gperf
+            perl
+            curl
+            zip
+
+      - name: Build static libevent
+        shell: msys2 {0}
+        run: |
+          set -e
+          LIBEVENT_VER=2.1.12-stable
+          curl -sSL -O https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VER/libevent-$LIBEVENT_VER.tar.gz
+          tar -xzf libevent-$LIBEVENT_VER.tar.gz
+          cd libevent-$LIBEVENT_VER
+          ./configure \
+            --disable-shared \
+            --enable-static \
+            --prefix=/tmp/libevent-install \
+            --disable-openssl
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Build static OpenSSL
+        shell: msys2 {0}
+        run: |
+          set -e
+          OPENSSL_VER=1.1.1w
+          curl -sSL -O https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
+          tar -xzf openssl-$OPENSSL_VER.tar.gz
+          cd openssl-$OPENSSL_VER
+          ./Configure \
+            mingw64 \
+            no-shared \
+            --prefix=/tmp/openssl-install \
+            --openssldir=/tmp/openssl-install
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Build memcached
+        shell: msys2 {0}
+        run: |
+          set -e
+          VERSION="${{ needs.prepare.outputs.release_version }}"
+          echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
+          ./autogen.sh
+
+          # Overwrite version.m4 after autogen.sh (perl version.pl uses git describe)
+          echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
+          ./configure \
+            --with-libevent=/tmp/libevent-install \
+            --with-libssl=/tmp/openssl-install \
+            --enable-tls \
+            --enable-sasl \
+            --enable-sasl-pwdb
+          make -j$(nproc)
+
+      - name: Verify
+        shell: msys2 {0}
+        run: ./memcached --version
+
+      - name: Package
+        shell: msys2 {0}
+        run: |
+          VERSION="${{ needs.prepare.outputs.release_version }}"
+          DIST="memcached-$VERSION-windows-x86_64-mingw"
+          mkdir -p "$DIST"
+          cp memcached.exe "$DIST/"
+          for dll in $(ldd memcached.exe 2>/dev/null | grep -oP '/mingw64/bin/[^\s]+' | sort -u); do
+            cp "$dll" "$DIST/" 2>/dev/null || true
+          done
+          zip -q -r "$DIST.zip" "$DIST"
+          sha256sum "$DIST.zip" > "$DIST.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memcached-windows-x86_64
+          path: |
+            memcached-*-windows-x86_64-mingw.zip
+            memcached-*-windows-x86_64-mingw.zip.sha256
+
   release:
-    needs: [prepare, build-linux]
+    needs: [prepare, build-linux, build-windows]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.prepare.outputs.release_version }}
@@ -212,3 +309,5 @@ jobs:
             memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64.tar.gz.sha256
             memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64.tar.gz
             memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64.tar.gz.sha256
+            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-mingw.zip
+            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-mingw.zip.sha256
