@@ -91,7 +91,22 @@ jobs:
               done
 
               # Install build dependencies
-              yum install -y autoconf automake libtool openssl-devel libseccomp-devel cyrus-sasl-devel
+              # cyrus-sasl kept dynamic: SASL plugins are loaded at runtime via .so anyway
+              yum install -y autoconf automake libtool cyrus-sasl-devel
+
+              # Build static OpenSSL 1.1.1 (system OpenSSL in manylinux2014 is 1.0.x, too old)
+              OPENSSL_VER=1.1.1w
+              curl -sSL -O https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
+              tar -xzf openssl-$OPENSSL_VER.tar.gz
+              cd openssl-$OPENSSL_VER
+              ./Configure \
+                linux-$(uname -m) \
+                no-shared \
+                --prefix=/tmp/openssl-install \
+                --openssldir=/tmp/openssl-install
+              make -j$(nproc)
+              make install
+              cd /workspace
 
               # Build static libevent
               LIBEVENT_VER=2.1.12-stable
@@ -107,20 +122,37 @@ jobs:
               make install
               cd /workspace
 
+              # Build static libseccomp
+              LIBSECC_VER=2.5.5
+              curl -sSL -O https://github.com/seccomp/libseccomp/releases/download/v$LIBSECC_VER/libseccomp-$LIBSECC_VER.tar.gz
+              tar -xzf libseccomp-$LIBSECC_VER.tar.gz
+              cd libseccomp-$LIBSECC_VER
+              ./configure \
+                --disable-shared \
+                --enable-static \
+                --prefix=/tmp/libseccomp-install
+              make -j$(nproc)
+              make install
+              cd /workspace
+
               # Write version.m4 for memcached
               echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
 
-              # Build memcached with static libevent, dynamic glibc
+              # Build memcached: static libs, dynamic glibc
+              # Static: libevent, libssl/libcrypto, libseccomp
+              # Dynamic: glibc, cyrus-sasl (plugins loaded at runtime)
               ./autogen.sh
               ./configure \
                 --with-libevent=/tmp/libevent-install \
+                --with-libssl=/tmp/openssl-install \
                 --enable-seccomp \
                 --enable-tls \
                 --enable-sasl \
-                --enable-sasl-pwdb
+                --enable-sasl-pwdb \
+                LDFLAGS="-L/tmp/libseccomp-install/lib"
               make -j$(nproc)
 
-              # Verify: libevent should NOT appear in ldd (statically linked)
+              # Verify: static libs should NOT appear in ldd
               # glibc (libc.so.6) SHOULD appear (dynamically linked)
               echo "=== ldd output ==="
               ldd memcached || true
