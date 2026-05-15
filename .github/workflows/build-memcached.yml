@@ -92,7 +92,7 @@ jobs:
 
               # Install build dependencies
               # cyrus-sasl kept dynamic: SASL plugins are loaded at runtime via .so anyway
-              yum install -y autoconf automake libtool cyrus-sasl-devel
+              yum install -y autoconf automake libtool gperf pkgconfig cyrus-sasl-devel
 
               # Build static OpenSSL 1.1.1 (system OpenSSL in manylinux2014 is 1.0.x, too old)
               OPENSSL_VER=1.1.1w
@@ -135,13 +135,14 @@ jobs:
               make install
               cd /workspace
 
-              # Write version.m4 for memcached
-              echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
-
               # Build memcached: static libs, dynamic glibc
               # Static: libevent, libssl/libcrypto, libseccomp
               # Dynamic: glibc, cyrus-sasl (plugins loaded at runtime)
               ./autogen.sh
+
+              # Overwrite version.m4 after autogen.sh (which calls perl version.pl
+              # that generates a git-describe version)
+              echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
               ./configure \
                 --with-libevent=/tmp/libevent-install \
                 --with-libssl=/tmp/openssl-install \
