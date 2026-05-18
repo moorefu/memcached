@@ -222,7 +222,8 @@ jobs:
             --disable-shared \
             --enable-static \
             --prefix=/tmp/libevent-install \
-            --disable-openssl
+            --disable-openssl \
+            --disable-samples
           make -j$(nproc)
           make install
           cd ..
