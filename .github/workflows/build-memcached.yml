@@ -109,9 +109,11 @@ jobs:
       # mingw64 缺少 sys/socket.h 等头文件需要大改(参考 jefyt/memcached-windows 的
       # 原生移植, 其代价是不支持 SASL)。MSYS 方案源码零改动、SASL/TLS 全可用,
       # 代价是 zip 内附带 msys-2.0.dll 等运行时 DLL。
+      # 注: 用 MINGW64 环境跑 autogen(autoconf 2.73 在纯 MSYS 环境处理本
+      # configure.ac 会报 undefined macro), 编译器显式指向 MSYS gcc。
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MSYS
+          msystem: MINGW64
           update: true
           install: >-
             base-devel
@@ -141,6 +143,7 @@ jobs:
           # Overwrite version.m4 after autogen.sh (perl version.pl uses git describe)
           echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
           ./configure \
+            CC=/usr/bin/gcc \
             --enable-tls \
             --enable-sasl \
             --enable-sasl-pwdb
