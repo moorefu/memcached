@@ -116,6 +116,9 @@ jobs:
           install: >-
             base-devel
             gcc
+            autoconf
+            automake
+            libtool
             gperf
             perl
             python
