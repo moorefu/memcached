@@ -155,51 +155,51 @@ jobs:
           MC=$!
           sleep 2
           python - <<'PYEOF'
-import socket, struct, sys
+          import socket, struct, sys
 
-HOST, PORT = '127.0.0.1', 11311
+          HOST, PORT = '127.0.0.1', 11311
 
-def send_pkt(s, opcode, key=b'', val=b''):
-    total = len(key) + len(val)
-    hdr = struct.pack('!BBHBBHIIQ', 0x80, opcode, len(key), 0, 0, 0, total, 0, 0)
-    s.sendall(hdr + key + val)
+          def send_pkt(s, opcode, key=b'', val=b''):
+              total = len(key) + len(val)
+              hdr = struct.pack('!BBHBBHIIQ', 0x80, opcode, len(key), 0, 0, 0, total, 0, 0)
+              s.sendall(hdr + key + val)
 
-def recv_pkt(s):
-    hdr = b''
-    while len(hdr) < 24:
-        c = s.recv(24 - len(hdr))
-        if not c: raise IOError('connection closed')
-        hdr += c
-    magic, op, keyl, extl, dtype, status, rest, opaque, cas = struct.unpack('!BBHBBHIIQ', hdr)
-    body = b''
-    while len(body) < rest:
-        c = s.recv(rest - len(body))
-        if not c: raise IOError('connection closed')
-        body += c
-    return status, body
+          def recv_pkt(s):
+              hdr = b''
+              while len(hdr) < 24:
+                  c = s.recv(24 - len(hdr))
+                  if not c: raise IOError('connection closed')
+                  hdr += c
+              magic, op, keyl, extl, dtype, status, rest, opaque, cas = struct.unpack('!BBHBBHIIQ', hdr)
+              body = b''
+              while len(body) < rest:
+                  c = s.recv(rest - len(body))
+                  if not c: raise IOError('connection closed')
+                  body += c
+              return status, body
 
-s = socket.create_connection((HOST, PORT), 5)
-send_pkt(s, 0x20)
-status, body = recv_pkt(s)
-if status != 0 or b'PLAIN' not in body.split():
-    sys.exit('FAIL: PLAIN mechanism missing')
-s.close()
+          s = socket.create_connection((HOST, PORT), 5)
+          send_pkt(s, 0x20)
+          status, body = recv_pkt(s)
+          if status != 0 or b'PLAIN' not in body.split():
+              sys.exit('FAIL: PLAIN mechanism missing')
+          s.close()
 
-s = socket.create_connection((HOST, PORT), 5)
-send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00testpass')
-status, body = recv_pkt(s)
-if status != 0:
-    sys.exit('FAIL: PLAIN auth failed with correct password')
-s.close()
+          s = socket.create_connection((HOST, PORT), 5)
+          send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00testpass')
+          status, body = recv_pkt(s)
+          if status != 0:
+              sys.exit('FAIL: PLAIN auth failed with correct password')
+          s.close()
 
-s = socket.create_connection((HOST, PORT), 5)
-send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00wrongpass')
-status, body = recv_pkt(s)
-if status == 0:
-    sys.exit('FAIL: wrong password was accepted')
-s.close()
-print('SASL PLAIN: all tests passed')
-PYEOF
+          s = socket.create_connection((HOST, PORT), 5)
+          send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00wrongpass')
+          status, body = recv_pkt(s)
+          if status == 0:
+              sys.exit('FAIL: wrong password was accepted')
+          s.close()
+          print('SASL PLAIN: all tests passed')
+          PYEOF
           kill $MC 2>/dev/null || true
 
       - name: Package
@@ -217,31 +217,31 @@ PYEOF
           mkdir -p "$DIST/sasl2"
           cp /usr/lib/sasl2/*.dll "$DIST/sasl2/" 2>/dev/null || true
           cat > "$DIST/README.txt" <<EOF
-memcached $VERSION Windows 版 (x86_64, MSYS2 运行时)
+          memcached $VERSION Windows 版 (x86_64, MSYS2 运行时)
 
-本包自带运行所需的全部 DLL (msys-2.0.dll 等), 解压即可运行,
-无需安装 MSYS2 或其他依赖。
+          本包自带运行所需的全部 DLL (msys-2.0.dll 等), 解压即可运行,
+          无需安装 MSYS2 或其他依赖。
 
-用法:
-  memcached.exe -p 11211 -m 64
+          用法:
+            memcached.exe -p 11211 -m 64
 
-SASL 认证 (-S):
-  echo testuser:testpass > pwdb.txt
-  MEMCACHED_SASL_PWDB=pwdb.txt memcached.exe -S
-  (内置 PLAIN 机制; 如需 SCRAM/GSSAPI 等机制, 设置环境变量
-   SASL_PATH 指向本目录的 sasl2 子目录)
+          SASL 认证 (-S):
+            echo testuser:testpass > pwdb.txt
+            MEMCACHED_SASL_PWDB=pwdb.txt memcached.exe -S
+            (内置 PLAIN 机制; 如需 SCRAM/GSSAPI 等机制, 设置环境变量
+             SASL_PATH 指向本目录的 sasl2 子目录)
 
-TLS: 完整支持 (openssl 3.x 已静态/随包提供)。
+          TLS: 完整支持 (openssl 3.x 已随包提供)。
 
-注意: 本构建基于 MSYS2 POSIX 兼容运行时, 性能低于原生 Linux 构建,
-适合开发/测试/轻量场景; 生产环境建议使用 Linux 构建。
+          注意: 本构建基于 MSYS2 POSIX 兼容运行时, 性能低于原生 Linux 构建,
+          适合开发/测试/轻量场景; 生产环境建议使用 Linux 构建。
 
-文件清单:
-  memcached.exe   主程序
-  msys-*.dll 等   MSYS2 运行时依赖
-  sasl2/          SASL 机制插件 (可选)
-  README.txt      本说明
-EOF
+          文件清单:
+            memcached.exe   主程序
+            msys-*.dll 等   MSYS2 运行时依赖
+            sasl2/          SASL 机制插件 (可选)
+            README.txt      本说明
+          EOF
           zip -q -r "$DIST.zip" "$DIST"
           sha256sum "$DIST.zip" > "$DIST.zip.sha256"
 
