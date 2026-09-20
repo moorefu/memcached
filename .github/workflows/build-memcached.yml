@@ -132,8 +132,10 @@ jobs:
             --prefix=/tmp/libevent-install \
             --disable-openssl \
             --disable-samples
-          make -j$(nproc)
-          make install
+          # Only build the library and headers: newer mingw gcc treats
+          # int-conversion in the old test suite as an error
+          make -j$(nproc) SUBDIRS=". include"
+          make install SUBDIRS=". include"
           cd ..
 
       - name: Build static OpenSSL
