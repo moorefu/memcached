@@ -71,7 +71,9 @@ jobs:
           ./autogen.sh
           echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
           autoreconf --force --install
-          tar czf memcached-src-autotools.tar.gz --exclude=.git --exclude=autom4te.cache .
+          # 输出先写到目录外再移回, 避免 "file changed as we read it"
+          tar czf /tmp/memcached-src-autotools.tar.gz --exclude=.git --exclude=autom4te.cache .
+          mv /tmp/memcached-src-autotools.tar.gz .
 
       - name: Upload source with configure
         uses: actions/upload-artifact@v4
