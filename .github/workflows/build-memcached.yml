@@ -105,54 +105,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # MSYS 工具链(完整 POSIX 运行时), 非 mingw64: memcached 源码是纯 Unix 代码,
+      # mingw64 缺少 sys/socket.h 等头文件需要大改(参考 jefyt/memcached-windows 的
+      # 原生移植, 其代价是不支持 SASL)。MSYS 方案源码零改动、SASL/TLS 全可用,
+      # 代价是 zip 内附带 msys-2.0.dll 等运行时 DLL。
       - uses: msys2/setup-msys2@v2
         with:
+          msystem: MSYS
           update: true
           install: >-
             base-devel
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-cyrus-sasl
+            gcc
             gperf
             perl
-            curl
+            python
             zip
-
-      - name: Build static libevent
-        shell: msys2 {0}
-        run: |
-          set -e
-          LIBEVENT_VER=2.1.12-stable
-          curl -sSL -O https://github.com/libevent/libevent/releases/download/release-$LIBEVENT_VER/libevent-$LIBEVENT_VER.tar.gz
-          tar -xzf libevent-$LIBEVENT_VER.tar.gz
-          cd libevent-$LIBEVENT_VER
-          ./configure \
-            --disable-shared \
-            --enable-static \
-            --prefix=/tmp/libevent-install \
-            --disable-openssl \
-            --disable-samples \
-            CFLAGS="-g -O2 -Wno-error=int-conversion -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types"
-          make -j$(nproc)
-          make install
-          cd ..
-
-      - name: Build static OpenSSL
-        shell: msys2 {0}
-        run: |
-          set -e
-          OPENSSL_VER=1.1.1w
-          curl -sSL -O https://www.openssl.org/source/openssl-$OPENSSL_VER.tar.gz
-          tar -xzf openssl-$OPENSSL_VER.tar.gz
-          cd openssl-$OPENSSL_VER
-          ./Configure \
-            mingw64 \
-            no-shared \
-            --prefix=/tmp/openssl-install \
-            --openssldir=/tmp/openssl-install
-          make -j$(nproc)
-          make install
-          cd ..
+            libevent
+            libevent-devel
+            libopenssl
+            openssl-devel
+            libsasl
+            libsasl-devel
 
       - name: Build memcached
         shell: msys2 {0}
@@ -165,8 +138,6 @@ jobs:
           # Overwrite version.m4 after autogen.sh (perl version.pl uses git describe)
           echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
           ./configure \
-            --with-libevent=/tmp/libevent-install \
-            --with-libssl=/tmp/openssl-install \
             --enable-tls \
             --enable-sasl \
             --enable-sasl-pwdb
@@ -174,18 +145,103 @@ jobs:
 
       - name: Verify
         shell: msys2 {0}
-        run: ./memcached --version
+        run: |
+          set -e
+          ./memcached --version
+
+          # SASL PLAIN 功能测试
+          printf 'testuser:testpass\n' > /tmp/pwdb
+          MEMCACHED_SASL_PWDB=/tmp/pwdb ./memcached -S -p 11311 -U 0 -m 64 -v > /tmp/mc.log 2>&1 &
+          MC=$!
+          sleep 2
+          python - <<'PYEOF'
+import socket, struct, sys
+
+HOST, PORT = '127.0.0.1', 11311
+
+def send_pkt(s, opcode, key=b'', val=b''):
+    total = len(key) + len(val)
+    hdr = struct.pack('!BBHBBHIIQ', 0x80, opcode, len(key), 0, 0, 0, total, 0, 0)
+    s.sendall(hdr + key + val)
+
+def recv_pkt(s):
+    hdr = b''
+    while len(hdr) < 24:
+        c = s.recv(24 - len(hdr))
+        if not c: raise IOError('connection closed')
+        hdr += c
+    magic, op, keyl, extl, dtype, status, rest, opaque, cas = struct.unpack('!BBHBBHIIQ', hdr)
+    body = b''
+    while len(body) < rest:
+        c = s.recv(rest - len(body))
+        if not c: raise IOError('connection closed')
+        body += c
+    return status, body
+
+s = socket.create_connection((HOST, PORT), 5)
+send_pkt(s, 0x20)
+status, body = recv_pkt(s)
+if status != 0 or b'PLAIN' not in body.split():
+    sys.exit('FAIL: PLAIN mechanism missing')
+s.close()
+
+s = socket.create_connection((HOST, PORT), 5)
+send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00testpass')
+status, body = recv_pkt(s)
+if status != 0:
+    sys.exit('FAIL: PLAIN auth failed with correct password')
+s.close()
+
+s = socket.create_connection((HOST, PORT), 5)
+send_pkt(s, 0x21, b'PLAIN', b'\x00testuser\x00wrongpass')
+status, body = recv_pkt(s)
+if status == 0:
+    sys.exit('FAIL: wrong password was accepted')
+s.close()
+print('SASL PLAIN: all tests passed')
+PYEOF
+          kill $MC 2>/dev/null || true
 
       - name: Package
         shell: msys2 {0}
         run: |
           VERSION="${{ needs.prepare.outputs.release_version }}"
-          DIST="memcached-$VERSION-windows-x86_64-mingw"
+          DIST="memcached-$VERSION-windows-x86_64-msys2"
           mkdir -p "$DIST"
           cp memcached.exe "$DIST/"
-          for dll in $(ldd memcached.exe 2>/dev/null | grep -oP '/mingw64/bin/[^\s]+' | sort -u); do
-            cp "$dll" "$DIST/" 2>/dev/null || true
+          # 打包 msys 运行时依赖 DLL, 解压即用无需安装 MSYS2
+          for dll in $(ldd memcached.exe | grep -oE '/usr/bin/[^ ]+\.dll' | sort -u); do
+            cp "$dll" "$DIST/"
           done
+          # SASL 机制插件(可选, 全部机制都要时才需要; PLAIN 已内置于 msys libsasl2)
+          mkdir -p "$DIST/sasl2"
+          cp /usr/lib/sasl2/*.dll "$DIST/sasl2/" 2>/dev/null || true
+          cat > "$DIST/README.txt" <<EOF
+memcached $VERSION Windows 版 (x86_64, MSYS2 运行时)
+
+本包自带运行所需的全部 DLL (msys-2.0.dll 等), 解压即可运行,
+无需安装 MSYS2 或其他依赖。
+
+用法:
+  memcached.exe -p 11211 -m 64
+
+SASL 认证 (-S):
+  echo testuser:testpass > pwdb.txt
+  MEMCACHED_SASL_PWDB=pwdb.txt memcached.exe -S
+  (内置 PLAIN 机制; 如需 SCRAM/GSSAPI 等机制, 设置环境变量
+   SASL_PATH 指向本目录的 sasl2 子目录)
+
+TLS: 完整支持 (openssl 3.x 已静态/随包提供)。
+
+注意: 本构建基于 MSYS2 POSIX 兼容运行时, 性能低于原生 Linux 构建,
+适合开发/测试/轻量场景; 生产环境建议使用 Linux 构建。
+
+文件清单:
+  memcached.exe   主程序
+  msys-*.dll 等   MSYS2 运行时依赖
+  sasl2/          SASL 机制插件 (可选)
+  README.txt      本说明
+EOF
           zip -q -r "$DIST.zip" "$DIST"
           sha256sum "$DIST.zip" > "$DIST.zip.sha256"
 
@@ -194,8 +250,8 @@ jobs:
         with:
           name: memcached-windows-x86_64
           path: |
-            memcached-*-windows-x86_64-mingw.zip
-            memcached-*-windows-x86_64-mingw.zip.sha256
+            memcached-*-windows-x86_64-msys2.zip
+            memcached-*-windows-x86_64-msys2.zip.sha256
 
   release:
     needs: [prepare, build-linux, build-windows]
@@ -219,5 +275,5 @@ jobs:
             memcached-linux-x86_64/memcached-${{ env.VERSION }}-linux-glibc2.17-x86_64.tar.gz.sha256
             memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64.tar.gz
             memcached-linux-aarch64/memcached-${{ env.VERSION }}-linux-glibc2.17-aarch64.tar.gz.sha256
-            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-mingw.zip
-            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-mingw.zip.sha256
+            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-msys2.zip
+            memcached-windows-x86_64/memcached-${{ env.VERSION }}-windows-x86_64-msys2.zip.sha256
