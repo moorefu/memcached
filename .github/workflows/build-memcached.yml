@@ -61,6 +61,24 @@ jobs:
           name: memcached-source
           path: memcached-${{ inputs.release_version }}.tar.gz
 
+      # 在 Linux 上预生成 configure: msys2 的 autoconf 2.73 处理本 configure.ac
+      # 会报 "undefined or overquoted macro", windows job 直接复用此产物跳过 autotools。
+      # autogen.sh 会用 git describe 生成版本号, 这里覆盖为发布版本后重新 autoreconf,
+      # 使 configure 内嵌正确的 VERSION (windows 端无 autoconf, 不能依赖 maintainer-mode 重建)。
+      - name: Pregenerate configure script
+        run: |
+          VERSION="${{ inputs.release_version }}"
+          ./autogen.sh
+          echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
+          autoreconf --force --install
+          tar czf memcached-src-autotools.tar.gz --exclude=.git --exclude=autom4te.cache .
+
+      - name: Upload source with configure
+        uses: actions/upload-artifact@v4
+        with:
+          name: memcached-source-autotools
+          path: memcached-src-autotools.tar.gz
+
   build-linux:
     needs: prepare
     strategy:
@@ -109,8 +127,8 @@ jobs:
       # mingw64 缺少 sys/socket.h 等头文件需要大改(参考 jefyt/memcached-windows 的
       # 原生移植, 其代价是不支持 SASL)。MSYS 方案源码零改动、SASL/TLS 全可用,
       # 代价是 zip 内附带 msys-2.0.dll 等运行时 DLL。
-      # 注: 用 MINGW64 环境跑 autogen(autoconf 2.73 在纯 MSYS 环境处理本
-      # configure.ac 会报 undefined macro), 编译器显式指向 MSYS gcc。
+      # autogen 在 prepare job 用 Linux autotools 预生成(msys2 autoconf 2.73 不兼容
+      # 本 configure.ac), 编译器显式指向 MSYS gcc。
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -118,9 +136,6 @@ jobs:
           install: >-
             base-devel
             gcc
-            autoconf
-            automake
-            libtool
             gperf
             perl
             python
@@ -132,16 +147,16 @@ jobs:
             libsasl
             libsasl-devel
 
+      - name: Download pregenerated configure
+        uses: actions/download-artifact@v4
+        with:
+          name: memcached-source-autotools
+
       - name: Build memcached
         shell: msys2 {0}
         run: |
           set -e
-          VERSION="${{ needs.prepare.outputs.release_version }}"
-          echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
-          ./autogen.sh
-
-          # Overwrite version.m4 after autogen.sh (perl version.pl uses git describe)
-          echo "m4_define([VERSION_NUMBER], [$VERSION])" > version.m4
+          tar xzf memcached-src-autotools.tar.gz
           ./configure \
             CC=/usr/bin/gcc \
             --enable-tls \
