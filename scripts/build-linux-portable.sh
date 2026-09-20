@@ -227,13 +227,15 @@ trap - EXIT
 log "打包"
 DIST="memcached-$VERSION-linux-glibc2.17-$ARCH"
 rm -rf "$DIST"
-mkdir -p "$DIST"
-cp memcached scripts/memcached-tool "$DIST/"
-cp COPYING "$DIST/LICENSE"
-cat > "$DIST/README.txt" <<EOF
+mkdir -p "$DIST/bin" "$DIST/include" "$DIST/share/doc" "$DIST/share/man/man1"
+cp memcached "$DIST/bin/"
+cp scripts/memcached-tool "$DIST/bin/"
+cp COPYING "$DIST/share/doc/LICENSE"
+cp doc/memcached.1 "$DIST/share/man/man1/"
+cat > "$DIST/share/doc/README.txt" <<EOF
 memcached $VERSION 便携版 (Linux $ARCH, glibc >= 2.17)
 
-单二进制发行版, 解压即用, 目标系统无需安装任何依赖库。
+标准前缀布局 (bin/include/share), 单二进制, 解压即用, 目标系统无需安装任何依赖库。
 以下库已静态编译进 memcached 二进制:
   - OpenSSL $OPENSSL_VER        (TLS 支持, --enable-tls)
   - libevent $LIBEVENT_VER
@@ -242,17 +244,16 @@ memcached $VERSION 便携版 (Linux $ARCH, glibc >= 2.17)
 唯一的动态依赖是 glibc 本身 (CentOS/RHEL 7 及更新版本均可直接运行)。
 
 基本用法:
-  ./memcached -u nobody -p 11211
+  ./bin/memcached -u nobody -p 11211
 
 SASL 认证 (-S, 二进制协议客户端):
   echo 'user:pass' > pwdb.txt
-  MEMCACHED_SASL_PWDB=./pwdb.txt ./memcached -S -u nobody
+  MEMCACHED_SASL_PWDB=./pwdb.txt ./bin/memcached -S -u nobody
 
-文件清单:
-  memcached        主程序
-  memcached-tool   管理辅助脚本 (perl, 目标系统需有 perl, 可选)
-  LICENSE          许可证 (BSD)
-  README.txt       本说明
+目录结构:
+  bin/     memcached 主程序, memcached-tool 管理脚本(perl, 可选)
+  include/ 占位 (memcached 无对外 API 头文件)
+  share/   文档(doc), 手册页(man), LICENSE
 EOF
 tar czf "$DIST.tar.gz" "$DIST"
 sha256sum "$DIST.tar.gz" > "$DIST.tar.gz.sha256"

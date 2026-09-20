@@ -207,40 +207,40 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.release_version }}"
           DIST="memcached-$VERSION-windows-x86_64-msys2"
-          mkdir -p "$DIST"
-          cp memcached.exe "$DIST/"
-          # 打包 msys 运行时依赖 DLL, 解压即用无需安装 MSYS2
+          rm -rf "$DIST"
+          mkdir -p "$DIST/bin" "$DIST/include" "$DIST/share/doc" "$DIST/share/sasl2"
+          cp memcached.exe "$DIST/bin/"
+          # 打包 msys 运行时依赖 DLL 到 bin/ (exe 同目录自动加载), 解压即用
           for dll in $(ldd memcached.exe | grep -oE '/usr/bin/[^ ]+\.dll' | sort -u); do
-            cp "$dll" "$DIST/"
+            cp "$dll" "$DIST/bin/"
           done
-          # SASL 机制插件(可选, 全部机制都要时才需要; PLAIN 已内置于 msys libsasl2)
-          mkdir -p "$DIST/sasl2"
-          cp /usr/lib/sasl2/*.dll "$DIST/sasl2/" 2>/dev/null || true
-          cat > "$DIST/README.txt" <<EOF
+          # SASL 机制插件(可选; PLAIN 已内置于 msys libsasl2)
+          cp /usr/lib/sasl2/*.dll "$DIST/share/sasl2/" 2>/dev/null || true
+          cp COPYING "$DIST/share/doc/LICENSE"
+          cat > "$DIST/share/doc/README.txt" <<EOF
           memcached $VERSION Windows 版 (x86_64, MSYS2 运行时)
 
-          本包自带运行所需的全部 DLL (msys-2.0.dll 等), 解压即可运行,
-          无需安装 MSYS2 或其他依赖。
+          标准前缀布局 (bin/include/share), 自带运行所需全部 DLL
+          (msys-2.0.dll 等位于 bin/), 解压即可运行, 无需安装 MSYS2。
 
           用法:
-            memcached.exe -p 11211 -m 64
+            bin/memcached.exe -p 11211 -m 64
 
           SASL 认证 (-S):
             echo testuser:testpass > pwdb.txt
-            MEMCACHED_SASL_PWDB=pwdb.txt memcached.exe -S
+            MEMCACHED_SASL_PWDB=pwdb.txt bin/memcached.exe -S
             (内置 PLAIN 机制; 如需 SCRAM/GSSAPI 等机制, 设置环境变量
-             SASL_PATH 指向本目录的 sasl2 子目录)
+             SASL_PATH 指向本包 share/sasl2 目录)
 
-          TLS: 完整支持 (openssl 3.x 已随包提供)。
+          TLS: 完整支持 (openssl 3.x 随包提供)。
 
           注意: 本构建基于 MSYS2 POSIX 兼容运行时, 性能低于原生 Linux 构建,
           适合开发/测试/轻量场景; 生产环境建议使用 Linux 构建。
 
-          文件清单:
-            memcached.exe   主程序
-            msys-*.dll 等   MSYS2 运行时依赖
-            sasl2/          SASL 机制插件 (可选)
-            README.txt      本说明
+          目录结构:
+            bin/     memcached.exe 主程序 + msys 运行时 DLL
+            include/ 占位 (memcached 无对外 API 头文件)
+            share/   文档(doc), SASL 机制插件(sasl2, 可选)
           EOF
           zip -q -r "$DIST.zip" "$DIST"
           sha256sum "$DIST.zip" > "$DIST.zip.sha256"
