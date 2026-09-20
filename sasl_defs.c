@@ -134,7 +134,12 @@ static int sasl_getconf(void *context, const char **path)
 
     }
 
-    return (*path != NULL) ? SASL_OK : SASL_FAIL;
+    /* 便携版改动: 找不到 SASL 配置文件不视为错误。
+     * cyrus-sasl 对 NULL path 是容忍的(按空搜索路径处理), 只有 SASL_FAIL 会
+     * 中断 sasl_server_init。若在这里返回 FAIL, 便携二进制在没有
+     * /etc/sasl2/memcached.conf 的系统上会直接启动失败(-S 模式)。
+     * SASL 配置文件只用于逐机制调参, PLAIN 认证不依赖它。 */
+    return SASL_OK;
 }
 #endif
 
@@ -204,13 +209,12 @@ void init_sasl(void) {
     }
 #endif
 
+    /* 便携版改动: 不把主机名作为 SASL user_realm。上游将 gethostname() 结果传给
+     * sasl_server_new, cyrus-sasl 会给不含 '@' 的用户名追加 "@主机名",
+     * 导致 MEMCACHED_SASL_PWDB 里的裸用户名条目(如 "user:pass")永远匹配不上。
+     * 本便携构建未编译 sasldb, PLAIN+pWDB 是唯一认证路径, 去掉 realm 后
+     * 客户端发送的用户名与 pwdb 条目直接对应。 */
     memset(my_sasl_hostname, 0, sizeof(my_sasl_hostname));
-    if (gethostname(my_sasl_hostname, sizeof(my_sasl_hostname)-1) == -1) {
-        if (settings.verbose) {
-            fprintf(stderr, "Error discovering hostname for SASL\n");
-        }
-        my_sasl_hostname[0] = '\0';
-    }
 
     if (sasl_server_init(sasl_callbacks, "memcached") != SASL_OK) {
         fprintf(stderr, "Error initializing sasl.\n");
